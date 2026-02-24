@@ -619,8 +619,8 @@ module cpu #(
             z_ptr_q <= 1'b0;
 
             alu_oc_q <= ALU_ADD; 
-            alu_a_q <= 8'd0; 
-            alu_b_q <= 8'd0;
+            alu_a_q <= {DATA_WIDTH{1'b0}};
+            alu_b_q <= {DATA_WIDTH{1'b0}};
             status_q <= 1'b0;
         end else begin
             state_q <= state_d;

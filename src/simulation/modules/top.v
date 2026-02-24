@@ -1,21 +1,20 @@
 module top #(
     parameter DIVISOR = 50_000_000,
-    parameter FILE_NAME = "mem_init copy.mif",
+    parameter FILE_NAME = "mem_init.mif",
     parameter ADDR_WIDTH = 6,
     parameter DATA_WIDTH = 16
 ) (
     input clk,
+    input rst_n,
     input [1:0] kbd,
     input [2:0] btn,
-    input [9:0] sw,     // zato sto u DE0 top nema rst_n, vec sve ide u sw
-    input [13:0] mnt,
+    input [8:0] sw,
+    output [13:0] mnt,
     output [9:0] led,
-    output [27:0] ssd   // zato sto se u DE0 top zove ssd, a ne hex...
+    output [27:0] hex
 );
-    
-    wire rst_n = sw[9];
+
     wire out_status;
-    assign led[5] = out_status;
     wire we;
     wire [ADDR_WIDTH - 1:0] addr;
     wire [DATA_WIDTH - 1:0] data;
@@ -23,8 +22,11 @@ module top #(
     wire [ADDR_WIDTH - 1:0] pc;
     wire [ADDR_WIDTH - 1:0] sp;
     wire [DATA_WIDTH - 1:0] out_cpu;
+
+    assign led[9:6] = 4'b0;
+    assign led[5] = out_status;
     assign led[4:0] = out_cpu;
-    
+
     wire out_clk;
     clk_div #(.DIVISOR(DIVISOR)) clk_div_inst (
         .clk(clk), .rst_n(rst_n), .out(out_clk)
@@ -61,18 +63,19 @@ module top #(
         .we(we),
         .addr(addr),
         .data(data),
-        .out(out_cpu), 
+        .out(out_cpu),
         .pc(pc),
         .sp(sp)
     );
 
 
     memory #(
-        .FILE_NAME("mem_init.mif"),
+        .FILE_NAME(FILE_NAME),
         .ADDR_WIDTH(ADDR_WIDTH),
         .DATA_WIDTH(DATA_WIDTH)
     ) mem_inst (
         .clk(out_clk),
+        .rst_n(rst_n),
         .we(we),
         .addr(addr),
         .data(data),
@@ -90,21 +93,20 @@ module top #(
     );
 
     ssd ssd1 (
-        .in(ones1), .out(ssd[6:0])
+        .in(ones1), .out(hex[6:0])
     );
 
     ssd ssd2 (
-        .in(tens1), .out(ssd[13:7])
+        .in(tens1), .out(hex[13:7])
     );
-    
+
     ssd ssd3 (
-        .in(ones2), .out(ssd[20:14])
+        .in(ones2), .out(hex[20:14])
     );
-    
+
     ssd ssd4 (
-        .in(tens2), .out(ssd[27:21])
+        .in(tens2), .out(hex[27:21])
     );
-    
 
 
 endmodule

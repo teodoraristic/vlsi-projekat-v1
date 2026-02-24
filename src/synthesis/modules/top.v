@@ -8,7 +8,7 @@ module top #(
     input rst_n,
     input [1:0] kbd,
     input [2:0] btn,
-    // input [8:0] sw,
+    input [8:0] sw,
     output [13:0] mnt,
     output [9:0] led,
     output [27:0] hex

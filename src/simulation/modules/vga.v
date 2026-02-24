@@ -57,7 +57,7 @@ module vga (
             hsync <= ~( (h_counter >= (H_VISIBLE_AREA + H_FRONT_PORCH)) 
             && (h_counter < (H_VISIBLE_AREA + H_FRONT_PORCH + H_SYNC_PULSE)) );
             
-            hsync <= ~( (v_counter >= (V_VISIBLE_AREA + V_FRONT_PORCH)) 
+            vsync <= ~( (v_counter >= (V_VISIBLE_AREA + V_FRONT_PORCH))
             && (v_counter < (V_VISIBLE_AREA + V_FRONT_PORCH + V_SYNC_PULSE)) );
         end 
     end
