@@ -88,12 +88,14 @@ module DE0_CV_TOP(input CLOCK2_50,
       .DATA_WIDTH(16)
     ) top_inst (
       .clk(CLOCK_50),
+      .rst_n(SW[9]),
       .kbd({PS2_DAT, PS2_CLK}),
       .btn(~KEY[2:0]),
-      .sw(SW[9:0]),
+      // .sw(SW[9:0]),
       .mnt({VGA_HS, VGA_VS, VGA_R, VGA_G, VGA_B}),
       .led(LEDR[9:0]),
-      .ssd({HEX5, HEX4, HEX1, HEX0})
+      .hex({HEX5, HEX4, HEX1, HEX0})
     );
 
 endmodule
+

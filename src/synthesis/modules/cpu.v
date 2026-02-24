@@ -1,686 +1,641 @@
 module cpu #(
     parameter ADDR_WIDTH = 6,
-    parameter DATA_WIDTH = 16,
-    parameter ADDR_HIGH = ADDR_WIDTH - 1,
-    parameter DATA_HIGH = DATA_WIDTH - 1,
-    parameter IR_WIDTH = 32
-) (
+    parameter DATA_WIDTH = 16
+)(
     input clk,
     input rst_n,
-    input [DATA_HIGH:0] mem,
-    input [DATA_HIGH:0] in,
+    input [DATA_WIDTH-1:0] mem,
+    input [DATA_WIDTH-1:0] in,
     input control,
     output status,
     output we,
-    output [ADDR_HIGH:0] addr,
-    output [DATA_HIGH:0] data,
-    output [DATA_HIGH:0] out,
-    output [ADDR_HIGH:0] pc,
-    output [ADDR_HIGH:0] sp
+    output [ADDR_WIDTH-1:0] addr,
+    output [DATA_WIDTH-1:0] data,
+    output [DATA_WIDTH-1:0] out,
+    output [ADDR_WIDTH-1:0] pc,
+    output [ADDR_WIDTH-1:0] sp
 );
 
-    // Kontrole
-    reg ld_pc, inc_pc;
-    reg ld_sp, inc_sp, dec_sp;
-    reg ld_mar;
-    reg ld_mdr;
-    reg ld_acc;
-    reg ld_ir;
+    // ALU
+    localparam [2:0] ALU_ADD = 3'b000;
+    localparam [2:0] ALU_SUB = 3'b001;
+    localparam [2:0] ALU_MUL = 3'b010;
 
+    reg [2:0] alu_oc_d, alu_oc_q;
+    reg [DATA_WIDTH-1:0] alu_a_d, alu_a_q;
+    reg [DATA_WIDTH-1:0] alu_b_d, alu_b_q;
+    wire [DATA_WIDTH-1:0] alu_f;
 
-    reg status_reg, status_next;
-    assign status = status_reg;
-    
-    // Ulazi
-    wire [ADDR_HIGH:0] in_pc, in_sp;
-    reg [ADDR_HIGH:0] in_mar;
-    reg [DATA_HIGH:0] in_mdr, in_acc;
-    reg [IR_WIDTH-1:0] in_ir;
-
-    reg [ADDR_HIGH:0] in_pc_next, in_pc_reg, in_sp_reg, in_sp_next;
-    assign in_pc = in_pc_reg;
-    assign in_sp = in_sp_reg;
-
-    // PC REG
-    wire [ADDR_HIGH:0] pc_out;
-    register #(.DATA_WIDTH(ADDR_WIDTH)) PC (
-        .clk(clk), .rst_n(rst_n), .cl(1'b0), .ld(ld_pc), .in(in_pc), .inc(inc_pc),.dec(1'b0),.sr(1'b0),.ir(1'b0),.sl(1'b0),.il(1'b0),.out(pc_out)
+    alu #(.DATA_WIDTH(DATA_WIDTH)) ALU (
+        .oc(alu_oc_q),
+        .a (alu_a_q),
+        .b (alu_b_q),
+        .f (alu_f)
     );
 
-    // SP REG
-    wire [ADDR_HIGH:0] sp_out;
-    register #(.DATA_WIDTH(ADDR_WIDTH)) SP (
-        .clk(clk),.rst_n(rst_n),.cl(1'b0),.ld(ld_sp),.in(in_sp),.inc(inc_sp),.dec(dec_sp),.sr(1'b0),.ir(1'b0),.sl(1'b0),.il(1'b0),.out(sp_out)
-    );
+    // Opcodes
+    localparam [3:0] OP_MOV = 4'b0000;
+    localparam [3:0] OP_ADD = 4'b0001;
+    localparam [3:0] OP_SUB = 4'b0010;
+    localparam [3:0] OP_MUL = 4'b0011;
+    localparam [3:0] OP_DIV = 4'b0100;
+    localparam [3:0] OP_IN = 4'b0111;
+    localparam [3:0] OP_OUT = 4'b1000;
+    localparam [3:0] OP_STOP = 4'b1111;
 
-    // MAR REG
-    wire [ADDR_HIGH:0] mar_out;
-    register #(.DATA_WIDTH(ADDR_WIDTH)) MAR (
-        .clk(clk),.rst_n(rst_n),.cl(1'b0),.ld(ld_mar),.in(in_mar),.inc(1'b0),.dec(1'b0),.sr(1'b0),.ir(1'b0),.sl(1'b0),.il(1'b0),.out(mar_out)
-    );
+    // States
+    localparam [7:0]
+        S_RESET = 8'd0,
+        S_FETCH_MAR = 8'd1,
+        S_FETCH_MDR = 8'd2,
+        S_FETCH_IR = 8'd3,
+        S_DECODE = 8'd4,
+        S_EAX_START = 8'd5,
+        S_EAX_PTR_MDR = 8'd6,
+        S_EAX_DONE = 8'd7,
+        S_EAY_START = 8'd8,
+        S_EAY_PTR_MDR = 8'd9,
+        S_EAY_DONE = 8'd10,
+        S_EAZ_START = 8'd11,
+        S_EAZ_PTR_MDR = 8'd12,
+        S_EAZ_DONE = 8'd13,
+        S_RDY_MAR = 8'd14,
+        S_RDY_MDR = 8'd15,
+        S_RDZ_MAR = 8'd16,
+        S_RDZ_MDR = 8'd17,
+        S_MOV_WB = 8'd18,
+        S_ALU_EXEC = 8'd19,
+        S_ALU_WB = 8'd20,
+        S_IN_WB = 8'd21,
+        S_OUT_MAR = 8'd22,
+        S_OUT_MDR = 8'd23,
+        S_OUT_DONE = 8'd24,
+        S_STOP_NEXT = 8'd25,
+        S_STOP_MDR = 8'd26,
+        S_STOP_OUT = 8'd27,
+        S_NEXT_FETCH = 8'd28,
+        S_HALT = 8'd29,
+        S_FETCH_MDR_W = 8'd30,
+        S_RDY_MDR_W = 8'd31,
+        S_OUT_MDR_W = 8'd32,
+        S_RDY_MAR_W = 8'd33,
+        S_RDZ_MDR_W = 8'd34,
+        S_RDZ_MAR_W = 8'd35,
+        S_EAX_PTR_MDR_W = 8'd36,
+        S_EAY_PTR_MDR_W = 8'd37,
+        S_EAZ_PTR_MDR_W = 8'd38,
+        S_STOP_MDR_W = 8'd39,
+        S_FETCH_MAR_2 = 8'd40,
+        S_FETCH_MDR_2 = 8'd41,
+        S_FETCH_MDR_W_2 = 8'd42,
+        S_FETCH_IR_2 = 8'd43
+    ;
 
-    // MDR REG
-    wire [DATA_HIGH:0] mdr_out;
-    register #(.DATA_WIDTH(DATA_WIDTH)) MDR (
-        .clk(clk),.rst_n(rst_n),.cl(1'b0),.ld(ld_mdr),.in(in_mdr),.inc(1'b0),.dec(1'b0),.sr(1'b0),.ir(1'b0),.sl(1'b0),.il(1'b0),.out(mdr_out)
-    );
+    reg [7:0] state_d, state_q;
 
-    // ACC REG
-    wire [DATA_HIGH:0] acc_out;
-    register #(.DATA_WIDTH(DATA_WIDTH)) ACC (
-        .clk(clk),.rst_n(rst_n),.cl(1'b0),.ld(ld_acc),.in(in_acc),.inc(1'b0),.dec(1'b0),.sr(1'b0),.ir(1'b0),.sl(1'b0),.il(1'b0),.out(acc_out)
+    // PC
+    reg [ADDR_WIDTH-1:0] pc_in_d;  
+    reg pc_cl_d, pc_ld_d, pc_inc_d, pc_dec_d;
+    wire [ADDR_WIDTH-1:0] pc_out;
+    register #(.DATA_WIDTH(ADDR_WIDTH)) PC_REG (
+        .clk(clk), .rst_n(rst_n),
+        .cl(pc_cl_d), .ld(pc_ld_d), .in(pc_in_d),
+        .inc(pc_inc_d), .dec(pc_dec_d),
+        .sr(1'b0), .ir(1'b0), .sl(1'b0), .il(1'b0),
+        .out(pc_out)
     );
-
-    // IR REG
-    wire [IR_WIDTH-1:0] ir_out;
-    register #(.DATA_WIDTH(IR_WIDTH)) IR (
-        .clk(clk),.rst_n(rst_n),.cl(1'b0),.ld(ld_ir),.in(in_ir),.inc(1'b0),.dec(1'b0),.sr(1'b0),.ir(1'b0),.sl(1'b0),.il(1'b0),.out(ir_out)
-    );
-
-    // POMOCNI REGISTRI ZA X,Y,Z
-    wire [DATA_HIGH:0] x_out;
-    reg ld_x;
-    reg [DATA_HIGH:0] in_x;
-    register #(.DATA_WIDTH(DATA_WIDTH)) REGX (
-        .clk(clk),.rst_n(rst_n),.cl(1'b0),.ld(ld_x),.in(in_x),.inc(1'b0),.dec(1'b0),.sr(1'b0),.ir(1'b0),.sl(1'b0),.il(1'b0),.out(x_out)
-    );
-    wire [DATA_HIGH:0] y_out;
-    reg ld_y;
-    reg [DATA_HIGH:0] in_y;
-    register #(.DATA_WIDTH(DATA_WIDTH)) REGY (
-        .clk(clk),.rst_n(rst_n),.cl(1'b0),.ld(ld_y),.in(in_y),.inc(1'b0),.dec(1'b0),.sr(1'b0),.ir(1'b0),.sl(1'b0),.il(1'b0),.out(y_out)
-    );
-    wire [DATA_HIGH:0] z_out;
-    reg ld_z;
-    reg [DATA_HIGH:0] in_z;
-    register #(.DATA_WIDTH(DATA_WIDTH)) REGZ (
-        .clk(clk),.rst_n(rst_n),.cl(1'b0),.ld(ld_z),.in(in_z),.inc(1'b0),.dec(1'b0),.sr(1'b0),.ir(1'b0),.sl(1'b0),.il(1'b0),.out(z_out)
-    );
-
-    reg [ADDR_HIGH:0] addr_reg, addr_next;
-    reg [DATA_HIGH:0] data_reg, data_next;
-    reg we_reg, we_next;
-    reg [DATA_HIGH:0] out_reg, out_next;
-
     assign pc = pc_out;
+
+    // SP
+    reg [ADDR_WIDTH-1:0] sp_in_d;
+    reg sp_cl_d, sp_ld_d, sp_inc_d, sp_dec_d;
+    wire [ADDR_WIDTH-1:0] sp_out;
+    register #(.DATA_WIDTH(ADDR_WIDTH)) SP_REG (
+        .clk(clk), .rst_n(rst_n),
+        .cl(sp_cl_d), .ld(sp_ld_d), .in(sp_in_d),
+        .inc(sp_inc_d), .dec(sp_dec_d),
+        .sr(1'b0), .ir(1'b0), .sl(1'b0), .il(1'b0),
+        .out(sp_out)
+    );
     assign sp = sp_out;
-    assign data = data_reg;
-    assign addr = addr_reg;
-    assign we = we_reg;
-    assign out = out_reg;
-    assign acc = acc_out;
-    
-    // OPERACIJE
-    
-    wire [3:0] opcode = ir_out[31:28];
 
-    wire mode_x = ir_out[27];    // 0 dir , 1 indir
-    wire [2:0] addr_x = ir_out[26:24];
-
-    wire mode_y = ir_out[23];
-    wire [2:0] addr_y = ir_out[22:20];
-
-    wire mode_z = ir_out[19];
-    wire [2:0] addr_z = ir_out[18:16];
-
-    wire [15:0] immed = ir_out[15:0];
-
-    // Adrese su 6 bita?
-    wire [5:0] full_addr_x = {3'b000, addr_x};
-    wire [5:0] full_addr_y = {3'b000, addr_y};
-    wire [5:0] full_addr_z = {3'b000, addr_z};
-
-    reg [DATA_HIGH:0] op_x_data, op_y_data, op_z_data;  // za smeštanje učitanih operanada
-    reg [DATA_HIGH:0] op_x_next, op_y_next, op_z_next;
-    reg [ADDR_HIGH:0] addr_x_reg, addr_y_reg, addr_z_reg; // registre za adrese operanada
-    reg [ADDR_HIGH:0] addr_x_next, addr_y_next, addr_z_next; 
-
-    // ALU JEDINICA
-    wire [2:0] alu_op_code = opcode[2:0] - 1'b1;
-    wire [DATA_HIGH:0] op1 = y_out; 
-    wire [DATA_HIGH:0] op2 = acc_out;
-    wire [DATA_HIGH:0] alu_result_reg;
-    alu #(.DATA_WIDTH(DATA_WIDTH)) alu_unit (
-        .oc(alu_op_code),.a(op1),.b(op2),.f(alu_result_reg)
+    // IR
+    reg [31:0] ir_in_d; 
+    reg ir_cl_d, ir_ld_d;
+    wire [31:0] ir_out;
+    register #(.DATA_WIDTH(32)) IR_REG (
+        .clk(clk), .rst_n(rst_n),
+        .cl(ir_cl_d), .ld(ir_ld_d), .in(ir_in_d),
+        .inc(1'b0), .dec(1'b0), .sr(1'b0), .ir(1'b0), .sl(1'b0), .il(1'b0),
+        .out(ir_out)
     );
 
-    reg [5:0] state_reg, state_next;
+    // MAR
+    reg [ADDR_WIDTH-1:0] mar_in_d; 
+    reg mar_cl_d, mar_ld_d;
+    wire [ADDR_WIDTH-1:0] mar_out;
+    register #(.DATA_WIDTH(ADDR_WIDTH)) MAR_REG (
+        .clk(clk), .rst_n(rst_n),
+        .cl(mar_cl_d), .ld(mar_ld_d), .in(mar_in_d),
+        .inc(1'b0), .dec(1'b0), .sr(1'b0), .ir(1'b0), .sl(1'b0), .il(1'b0),
+        .out(mar_out)
+    );
+    assign addr = mar_out;
 
-    localparam [3:0] MOV = 4'b0000;
-    localparam [3:0] ADD = 4'b0001;
-    localparam [3:0] SUB = 4'b0010;
-    localparam [3:0] MUL = 4'b0011;
-    localparam [3:0] DIV = 4'b0100;
-    localparam [3:0] IN = 4'b0111;
-    localparam [3:0] OUT = 4'b1000;
-    localparam [3:0] STOP = 4'b1111;
+    // MDR
+    reg [DATA_WIDTH-1:0] mdr_in_d; 
+    reg mdr_cl_d, mdr_ld_d;
+    wire [DATA_WIDTH-1:0] mdr_out;
+    register #(.DATA_WIDTH(DATA_WIDTH)) MDR_REG (
+        .clk(clk), .rst_n(rst_n),
+        .cl(mdr_cl_d), .ld(mdr_ld_d), .in(mdr_in_d),
+        .inc(1'b0), .dec(1'b0), .sr(1'b0), .ir(1'b0), .sl(1'b0), .il(1'b0),
+        .out(mdr_out)
+    );
 
-    localparam lastMemoryField = 6'd63;
-    localparam pc_start = 6'd8;
-    localparam pc_end = 6'd24;
-    localparam [5:0] ZERO_STATE = 6'b000000;
-    localparam [5:0] INITIATION = 6'b111111;
-    reg halted = 1'b0;
+    reg [DATA_WIDTH-1:0] acl_in_d;
+    reg acl_cl_d, acl_ld_d;
+    wire [DATA_WIDTH-1:0] acl_out;
+    register #(.DATA_WIDTH(DATA_WIDTH)) ACL_REG (
+        .clk(clk), .rst_n(rst_n),
+        .cl(acl_cl_d), .ld(acl_ld_d), .in(acl_in_d),
+        .inc(1'b0), .dec(1'b0), .sr(1'b0), .ir(1'b0), .sl(1'b0), .il(1'b0),
+        .out(acl_out)
+    );
 
-    always @(posedge clk, negedge rst_n) begin
-        if (!rst_n) begin
-            state_reg <= INITIATION; // Podrazumevano
-            in_pc_reg <= pc_start;
-            in_sp_reg <= lastMemoryField;
-            halted <= 0;
-           
-            data_reg <= {DATA_WIDTH{1'b0}};
-            addr_reg <= {ADDR_WIDTH{1'b0}};
-            out_reg <= {ADDR_WIDTH{1'b0}};
-            we_reg <= 1'b0;
-            status_reg <= 1'b0;
+    reg we_d, we_q;
+    reg [DATA_WIDTH-1:0] data_d, data_q;
+    reg [DATA_WIDTH-1:0] out_d, out_q;
+    reg status_d, status_q;
 
-        end else begin
-           
-            data_reg <= data_next;
-            addr_reg <= addr_next;
-            out_reg <= out_next;
-            we_reg <= we_next;
-            status_reg <= status_next;
-            state_reg <= state_next;
-            
-            in_pc_reg <= in_pc_next;
-            in_sp_reg <= in_sp_next;
-        end
+    assign we = we_q;
+    assign data = data_q;
+    assign out = out_q;
+    assign status = status_d;
+
+    // IR
+    wire [15:0] ir16 = ir_out[15:0];
+    wire [3:0] opcode = ir16[15:12];
+    wire [3:0] Xo = ir16[11:8];
+    wire [3:0] Yo = ir16[7:4];
+    wire [3:0] Zo = ir16[3:0];
+
+    wire X_ind = Xo[3];
+    wire Y_ind = Yo[3];
+    wire Z_ind = Zo[3];
+    wire [2:0] X_reg = Xo[2:0];
+    wire [2:0] Y_reg = Yo[2:0];
+    wire [2:0] Z_reg = Zo[2:0];
+
+    wire [ADDR_WIDTH-1:0] X_dir_addr = {{(ADDR_WIDTH-3){1'b0}}, X_reg};
+    wire [ADDR_WIDTH-1:0] Y_dir_addr = {{(ADDR_WIDTH-3){1'b0}}, Y_reg};
+    wire [ADDR_WIDTH-1:0] Z_dir_addr = {{(ADDR_WIDTH-3){1'b0}}, Z_reg};
+
+    // EA
+    reg [ADDR_WIDTH-1:0] EA_x_d, EA_x_q;
+    reg [ADDR_WIDTH-1:0] EA_y_d, EA_y_q;
+    reg [ADDR_WIDTH-1:0] EA_z_d, EA_z_q;
+
+    reg [DATA_WIDTH-1:0] Y_val_d, Y_val_q;
+    reg [DATA_WIDTH-1:0] Z_val_d, Z_val_q;
+
+    reg [1:0] stop_phase_d, stop_phase_q;
+
+    reg x_ptr_d, x_ptr_q, y_ptr_d, y_ptr_q, z_ptr_d, z_ptr_q;
+
+    task set_defaults;
+    begin
+        we_d = 1'b0;
+        data_d = data_q;
+        out_d = out_q;
+        status_d = 1'b0;
+
+        pc_cl_d=1'b0; pc_ld_d=1'b0; pc_inc_d=1'b0; pc_dec_d=1'b0; pc_in_d = {ADDR_WIDTH{1'b0}};
+        sp_cl_d=1'b0; sp_ld_d=1'b0; sp_inc_d=1'b0; sp_dec_d=1'b0; sp_in_d = {ADDR_WIDTH{1'b0}};
+        mar_cl_d=1'b0; mar_ld_d=1'b0; mar_in_d = {ADDR_WIDTH{1'b0}};
+        mdr_cl_d=1'b0; mdr_ld_d=1'b0; mdr_in_d = {DATA_WIDTH{1'b0}};
+        ir_cl_d =1'b0; ir_ld_d =1'b0; ir_in_d = 32'd0;
+        acl_cl_d=1'b0; acl_ld_d=1'b0; acl_in_d = {DATA_WIDTH{1'b0}};
+
+        alu_oc_d = alu_oc_q;
+        alu_a_d = alu_a_q;
+        alu_b_d = alu_b_q;
+
+        EA_x_d = EA_x_q; EA_y_d = EA_y_q; EA_z_d = EA_z_q;
+        Y_val_d = Y_val_q; Z_val_d = Z_val_q;
+        stop_phase_d = stop_phase_q;
+
+        x_ptr_d = x_ptr_q; y_ptr_d = y_ptr_q; z_ptr_d = z_ptr_q;
+
+        state_d = state_q;
     end
+    endtask
 
-
-    localparam [5:0] FETCH = 6'd1;
-    localparam [5:0] DECODE = 6'd2, DECODE_PAUSE = 6'd3, DECODE2 = 6'd4, DECODE3 = 6'd5;
-    localparam [5:0] EXEC = 6'd6, EXEC2 = 6'd7, EXEC_PAUSE = 6'd8, EXEC3 = 6'd9, EXEC4 = 6'd10, EXEC5 = 6'd11, EXEC_PAUSE2 = 6'd12;
-    localparam [5:0] EXEC_PAUSE3 = 6'd13, EXEC6 = 6'd14, EXEC7 = 6'd15, EXEC8 = 6'd16;
-    localparam [5:0] HALT = 6'd17;
-    localparam [5:0] ADR_X = 6'd18, ADR_X_PAUSE = 6'd19, ADR_X_EPILOG = 6'd20;
-    localparam [5:0] ADR_Y = 6'd21, ADR_Y_PAUSE = 6'd22, ADR_Y_EPILOG = 6'd23;
-    localparam [5:0] ADR_Z = 6'd24, ADR_Z_PAUSE = 6'd25, ADR_Z_EPILOG = 6'd26;
-    localparam [5:0] EXEC_PAUSE4 = 6'd27, EXEC9 = 6'd28, EXEC10 = 6'd29;
-    localparam [5:0] DECODE_HALF = 6'd30;
-    // FSM
     always @(*) begin
-        state_next = state_reg;
-        ld_mar = 0; ld_mdr = 0; ld_ir = 0;
-        ld_pc = 0; inc_pc = 0; in_mar = 0;
-        in_mdr = 0; in_ir = 0; we_next = 0;
-        ld_sp = 0;
-        ld_acc = 0; in_acc = 0;
-        addr_next = 0;
-        data_next = 0;
-        out_next = 0;
-        ld_acc = 0;
-        status_next = 0;
-        in_pc_next = {{ADDR_WIDTH},1'b0};
-        in_sp_next = {{ADDR_WIDTH},1'b0};
+        set_defaults();
 
-        ld_x = 0; ld_y = 0; ld_z = 0;
-        in_x = {{DATA_WIDTH},1'b0};
-        in_y = {{DATA_WIDTH},1'b0};
-        in_z = {{DATA_WIDTH},1'b0};
+        case (state_q)
+            // 0
+            S_RESET: begin
+                pc_ld_d = 1'b1;
+                pc_in_d = {{(ADDR_WIDTH-3){1'b0}}, 3'd1} << 3;
+                sp_ld_d = 1'b1;
+                sp_in_d = {ADDR_WIDTH{1'b1}};
+                ir_cl_d = 1'b1;
+                mdr_cl_d = 1'b1;
+                mar_cl_d = 1'b1;
+                status_d = 1'b0;
 
-        case (state_reg)
-            INITIATION: begin
-                ld_pc = 1;
-                inc_pc = 0;
-                ld_sp = 1;
-                
-                state_next = FETCH;
+                state_d = S_FETCH_MAR;
             end
-            ZERO_STATE: begin
-                state_next = FETCH;
-                if (pc_out == pc_end) state_next = HALT;
-            end
-            FETCH: begin
-                // Prva faza, potrebno je procitati instrukciju iz pc
-                in_mar = pc_out;
-                ld_mar = 1;
-                inc_pc = 1;
-                state_next = DECODE;
-            end
-            DECODE: begin
-                // Postavlja se adresa iz mar_out, treba jedan takt pauze da bi se upisalo u mdr...
-                addr_next = mar_out;
-                state_next = DECODE_PAUSE;                
-            end
-            DECODE_PAUSE: begin
-                state_next = DECODE2;
-            end
-            DECODE2: begin
-                in_mdr = mem;   // sad je mem validan
-                ld_mdr = 1;
-                in_ir = {mem,16'h0000};
-                ld_ir = 1;
-                state_next = DECODE3;     
-            end
-            DECODE3: begin
-                // DEKODIRANJE
-                case (opcode)
-                    MOV: begin
-                        // MOV instrukcija
-                        if ({mode_z,addr_z} == 4'h0) begin
-                            // Ukoliko je poslednji operand 0, instrukcija se izvrsava
-                            // Potrebno je videti koja su adresiranja u pitanju
-                            if ({mode_x,mode_y} == 0) begin
-                                // Oba su direktno adresiranje, idemo direktno na EXEC fazu
-                               
-                                in_y = full_addr_y;
-                                ld_y = 1;
-                                in_x = full_addr_x;
-                                ld_x = 1;
-                                state_next = EXEC;
-                            end else begin
-                                // Indirektna adresiranja cemo da proveravamo u posebnim stanjima
-                                // Na kraju poslednjeg indirektnog stanja, tacne adrese oba operanda moraju da se nalaze u adekvatnim reg
-                                in_y = full_addr_y;
-                                ld_y = 1;
-                                in_x = full_addr_x;
-                                ld_x = 1;
-                                state_next = ADR_Y;
-                            end
-                        end else begin
-                            // Ako poslednji operand nije 0, instrukcija se NE izvrsava
 
-                        end
-                        
-                    end
-                    ADD, SUB, MUL, DIV: begin
-                        // Ove 4 instrukcije imaju istu osnovu
-                        // X = Y OP Z
-                        // Opet proveravamo adresiranje
-                        if ({mode_x,mode_y,mode_z} == 3'b000) begin
-                            // sve je direktno, idemo odmah u EXEC
-                            
-                            in_y = full_addr_y;
-                            ld_y = 1;
-                            in_z = full_addr_z;
-                            ld_z = 1;
-                            in_x = full_addr_x;
-                            ld_x = 1;
+            //1
+            S_FETCH_MAR: begin
+                mar_ld_d = 1'b1;
+                mar_in_d = pc_out;
+                state_d = S_FETCH_MDR;
+            end
 
-                            state_next = EXEC;
-                        
-                        end else begin
-                            in_z = full_addr_z;
-                            ld_z = 1;
-                            in_y = full_addr_y;
-                            ld_y = 1;
-                            in_x = full_addr_x;
-                            ld_x = 1;
+            //2
+            S_FETCH_MDR: begin
+                state_d = S_FETCH_MDR_W;
+            end
 
-                            state_next = ADR_Z;
-                        end
-                    end
-                    IN: begin
-                        // IN instrukcija, TEK ZA ISPIT TREBA
-                        if (mode_x == 1'b0) begin
-                            in_x = full_addr_x;
-                            ld_x = 1;
-                            state_next = EXEC;
-                        end else begin
-                            in_x = full_addr_x;
-                            ld_x = 1;
-                            state_next = ADR_X;
-                        end
-                        //in_x = full_addr_x;
-                        //ld_x = 1;
-                        //state_next = ZERO_STATE; // ZBOG PROVERE CPU
-                        //state_next = EXEC;
-                    end
-                    OUT: begin
-                        // OUT instrukcija, TEK ZA ISPIT
-                        if (mode_x == 1'b0) begin
-                            in_x = full_addr_x;
-                            ld_x = 1;
-                            state_next = EXEC;
-                        end else begin
-                            in_x = full_addr_x;
-                            ld_x = 1;
-                            state_next = ADR_X;
-                        end
-                        //state_next = HALT; // ZBOG PROVERE CPU
-                    end
-                    STOP: begin
-                        // I stop ispisuje na standardni izlaz...
-                        if (addr_x == 3'b000 && addr_y == 3'b000 && addr_z == 3'b000) begin
-                            state_next = HALT;
-                        end else if ({mode_x,mode_y,mode_z} == 3'b000) begin
-                            state_next = EXEC;
-                        end else begin
-                            in_z = full_addr_z;
-                            ld_z = 1;
-                            in_y = full_addr_y;
-                            ld_y = 1;
-                            in_x = full_addr_x;
-                            ld_x = 1;
-                            state_next = ADR_Z;
-                        end
-                    end
-                    default:
-                        state_next = ZERO_STATE; 
-                endcase
+            //28
+            S_FETCH_MDR_W: begin
+                mdr_in_d = mem;
+                mdr_ld_d = 1'b1;
+                state_d = S_FETCH_IR;
             end
-            EXEC:   begin
-                // Prvo moramo opet postaviti CASE strukturu
-                case (opcode)
-                    MOV: begin
-                        // Imamo adrese oba operanda u addr_x_reg, addr_y_reg
-                        // Na adresu x treba upisati element iz y
-                        in_mar = y_out;
-                        ld_mar = 1;
 
-                        // U mar upisali adresu x, u sl koraku ga dohvatamo iz memorije
-                        state_next = EXEC2;
-                    end
-                    ADD, SUB, MUL, DIV: begin
-                        // Ove 4 instrukcije imaju istu osnovu
-                        // X = Y OP Z
-                        in_mar = y_out;
-                        ld_mar = 1;
+            //3
+            S_FETCH_IR: begin
+                ir_in_d = {16'b0, mdr_out};
+                ir_ld_d = 1'b1;
+                pc_inc_d = 1'b1;
 
-                        state_next = EXEC2;
-                    end
-                    IN: begin
-                        // IN instrukcija
-                        in_mar = x_out;
-                        ld_mar = 1;
-                        status_next = 1;
-                        state_next = EXEC2;
-                    end
-                    OUT: begin
-                        // OUT instrukcija
-                        in_mar = x_out;
-                        ld_mar = 1;
+                x_ptr_d = 1'b0;
+                y_ptr_d = 1'b0;
+                z_ptr_d = 1'b0;
+                state_d = S_DECODE;
+            end
 
-                        state_next = EXEC2;
-                    end
-                    STOP: begin
-                        // Ispisuje podatke koji nisu 0 na standardni izlaz
-                        if (x_out != 6'd0) begin
-                            in_mar = x_out;
-                            ld_mar = 1;
-                            state_next = EXEC2;
-                        end else begin
-                            state_next = EXEC4;
-                        end
-                    end
-                    default:
-                        state_next = ZERO_STATE; 
-                endcase
+            //4
+            S_DECODE: begin
+                if (opcode != OP_IN && opcode != OP_ADD && opcode != OP_DIV && opcode != OP_MOV && opcode != OP_MUL && opcode != OP_OUT && opcode != OP_STOP && opcode != OP_SUB) state_d = S_FETCH_MAR_2;
+                else state_d = S_EAX_START;
             end
-            EXEC2:   begin
-                // Prvo moramo opet postaviti CASE strukturu
-                case (opcode)
-                    MOV: begin
-                        // u MAR se nalazi adresa od y, dohvatamo podatak iz Y,
-                        addr_next = mar_out;
-                        state_next =  EXEC_PAUSE;
-                    end
-                    ADD, SUB, MUL, DIV: begin
-                        // Ove 4 instrukcije imaju istu osnovu
-                        addr_next = mar_out;
-                        state_next = EXEC_PAUSE;
-                    end
-                    IN: begin
-                        // IN instrukcija
-                        status_next = 1;
-                        if (control == 1'b1) begin
-                            status_next = 0;
-                            in_mdr = in;
-                            ld_mdr = 1;
-                            state_next = EXEC4;
-                        end else begin
-                            state_next = EXEC2;
-                        end
-                        //in_mdr = in;
-                        //ld_mdr = 1;
-                        //state_next = EXEC4;
-                    end
-                    OUT: begin
-                        // OUT instrukcija
-                        addr_next = mar_out;
-                        state_next = EXEC_PAUSE;
-                    end
-                    STOP: begin
-                        addr_next = mar_out;
-                        state_next = EXEC_PAUSE;
-                    end
-                    default:
-                        state_next = ZERO_STATE; 
-                endcase
-            end
-            EXEC_PAUSE: begin
-                state_next = EXEC3;
-                
-            end
-            EXEC3:   begin
-                
-                in_mdr = mem;
-                ld_mdr = 1;
-                state_next = EXEC4;
-            end
-            EXEC4: begin
-                // Prvo moramo opet postaviti CASE strukturu
-                case (opcode)
-                    MOV: begin
-                        // u mdr imamo podatak iz Y, a u mar imamo adresu X
-                        in_y = mdr_out;
-                        ld_y = 1;
-                        // na mdr aut je ono sto treba
-                        in_mar = x_out;
-                        ld_mar = 1;
-                        // mar i data postavljeni
-                        state_next = EXEC5;
-                    end
-                    ADD, SUB, MUL, DIV: begin
-                        // Ove 4 instrukcije imaju istu osnovu
-                        in_acc = mdr_out;
-                        ld_acc = 1;
-                        // u acc Y
-                        in_mar = z_out;
-                        ld_mar = 1;
 
-                        state_next = EXEC5;
-                    end
-                    IN: begin
-                        // IN instrukcija
-                        addr_next = mar_out;
-                        data_next = mdr_out;
-                        we_next = 1;
-                        state_next = EXEC_PAUSE2;
-                    end
-                    OUT: begin
-                        // OUT instrukcija
-                        out_next = mdr_out;
-                        state_next = ZERO_STATE;
-                    end
-                    STOP: begin
-                        out_next = mdr_out;
-                        if (y_out != 6'd0) begin
-                            in_mar = y_out;
-                            ld_mar = 1;
-                            state_next = EXEC5;
-                        end else begin
-                            state_next = EXEC7;
-                        end   
-                    end
-                    default:
-                        state_next = ZERO_STATE; 
-                endcase
+            S_FETCH_MAR_2: begin
+                mar_ld_d = 1'b1;
+                mar_in_d = pc_out;
+                state_d = S_FETCH_MDR_2;
             end
-            EXEC5:   begin
-                case (opcode)
-                    MOV: begin
-                        addr_next = mar_out;
-                        data_next = y_out;                
-                        we_next = 1;    // upis
-                        state_next = EXEC_PAUSE2;
-                    end
-                    ADD, SUB, MUL, DIV: begin
-                        in_y = acc_out;
-                        ld_y = 1;
+            //2
+            S_FETCH_MDR_2: begin
+                state_d = S_FETCH_MDR_W_2;
+            end
 
-                        addr_next = mar_out;
-                        state_next = EXEC_PAUSE3;
+            //28
+            S_FETCH_MDR_W_2: begin
+                mdr_in_d = mem;
+                mdr_ld_d = 1'b1;
+                state_d = S_FETCH_IR_2;
+            end
 
-                    end
-                    IN: begin
-                        // IN instrukcija
-                    end
-                    OUT: begin
-                        // OUT instrukcija
-                        
-                    end
-                    STOP: begin
-                        addr_next = mar_out;
-                        state_next = EXEC_PAUSE3;
-                    end
-                    default:
-                        state_next = ZERO_STATE; 
-                endcase
-                
-            end
-            EXEC_PAUSE2: begin
-                state_next = ZERO_STATE;
-            end
-            EXEC_PAUSE3: begin
-                state_next = EXEC6;
-            end
-            EXEC6: begin
-                in_mdr = mem;
-                ld_mdr = 1;
-                we_next = 0;
-                state_next = EXEC7;
-                
-            end
-            EXEC7: begin
-                case (opcode)
-                    ADD,SUB,MUL,DIV: begin
-                        in_acc = mdr_out;
-                        ld_acc = 1;
+            //3
+            S_FETCH_IR_2: begin
+                ir_in_d = {mdr_out, ir16};
+                ir_ld_d = 1'b1;
+                pc_inc_d = 1'b1;
 
-                        in_mar = x_out;
-                        ld_mar = 1;
-                        
-                        state_next = EXEC8;
-                    end
-                    STOP: begin
-                        out_next = mdr_out;
-                        if (z_out != 6'd0) begin
-                            in_mar = z_out;
-                            ld_mar = 1;
-                            state_next = EXEC8;
-                        end else begin
-                            state_next = ZERO_STATE;
-                        end
-                    end 
-                    default: begin
-                        state_next = ZERO_STATE;
-                    end
-                endcase
-                
+                x_ptr_d = 1'b0;
+                y_ptr_d = 1'b0;
+                z_ptr_d = 1'b0;
+                state_d = S_EAX_START;
             end
-            EXEC8: begin
-                case (opcode)
-                    ADD,SUB,MUL,DIV: begin
-                        addr_next = mar_out;
-                        data_next = alu_result_reg;
-                        we_next = 1; // upis
-                        state_next = EXEC_PAUSE2;
-                    end
-                    STOP: begin
-                        addr_next = mar_out;
-                        state_next = EXEC_PAUSE4;
-                    end 
-                    default: begin
-                        
-                    end 
-                endcase
-            end
-            EXEC_PAUSE4: begin
-                state_next = EXEC9;
-            end
-            EXEC9: begin
-                in_mdr = mem;
-                ld_mdr = 1;
-                we_next = 0;
-                state_next = EXEC10;
-            end
-            EXEC10: begin
-                out_next = mdr_out;
-                state_next = ZERO_STATE;
-            end
-            HALT: begin
-                halted = 1'b1;
-                state_next = HALT; // ostani u ovom stanju zauvek
-                ld_pc = 0;
-                ld_sp = 0;
-                ld_mar = 0;
-                ld_mdr = 0;
-                ld_ir = 0;
-                ld_acc = 0;
-                we_next = 0;
-                addr_next = addr_reg;
-                data_next = data_reg;
-                if (out_reg !== 4'b1010)
-                    out_next = 4'b1010;
-                else
-                    out_next = 4'b0101;
-            end
-            ADR_Z: begin
-                if (mode_z != 1'b0) begin
-                    addr_next = z_out;
-                    state_next = ADR_Z_PAUSE;
+
+            //5
+            // EA X
+            S_EAX_START: begin
+                if (Xo == 4'b0000) begin
+                    EA_x_d = {ADDR_WIDTH{1'b0}};
+                    x_ptr_d = 1'b0;
+                    state_d = S_EAX_DONE;
+                end else if (X_ind) begin
+                    mar_ld_d = 1'b1;
+                    mar_in_d = X_dir_addr;
+                    x_ptr_d = 1'b1;
+                    state_d = S_EAX_PTR_MDR;
                 end else begin
-                    state_next = ADR_Y;
+                    EA_x_d = X_dir_addr;
+                    x_ptr_d = 1'b0;
+                    state_d = S_EAX_DONE;
                 end
             end
-            ADR_Z_PAUSE: begin
-                state_next = ADR_Z_EPILOG;
+
+            //6
+            S_EAX_PTR_MDR: begin
+                state_d = S_EAX_PTR_MDR_W;
             end
-            ADR_Z_EPILOG: begin
-                in_z = mem;
-                ld_z = 1;
-                state_next = ADR_Y;
+
+            //
+            S_EAX_PTR_MDR_W: begin
+                mdr_in_d = mem;
+                mdr_ld_d = 1'b1;
+                state_d = S_EAX_DONE;
             end
-            ADR_Y: begin
-                if (mode_y != 1'b0) begin
-                    addr_next = y_out;
-                    state_next = ADR_Y_PAUSE;
+
+            //7
+            S_EAX_DONE: begin
+                if (x_ptr_q) EA_x_d = mdr_out[ADDR_WIDTH-1:0];
+                state_d = S_EAY_START;
+            end
+
+            //8
+            // EA Y
+            S_EAY_START: begin
+                if (Yo == 4'b0000) begin
+                    EA_y_d = {ADDR_WIDTH{1'b0}};
+                    y_ptr_d = 1'b0;
+                    state_d = S_EAY_DONE;
+                end else if (Y_ind) begin
+                    mar_ld_d = 1'b1;
+                    mar_in_d = Y_dir_addr;
+                    y_ptr_d = 1'b1;
+                    state_d = S_EAY_PTR_MDR;
                 end else begin
-                    state_next = ADR_X;
+                    EA_y_d  = Y_dir_addr;
+                    y_ptr_d = 1'b0;
+                    state_d = S_EAY_DONE;
                 end
             end
-            ADR_Y_PAUSE: begin
-                state_next = ADR_Y_EPILOG;
+
+            //9
+            S_EAY_PTR_MDR: begin
+                state_d = S_EAY_PTR_MDR_W;
             end
-            ADR_Y_EPILOG: begin
-                in_y = mem;
-                ld_y = 1;
-                state_next = ADR_X;
+
+            S_EAY_PTR_MDR_W: begin
+                mdr_in_d = mem;
+                mdr_ld_d = 1'b1;
+                state_d = S_EAY_DONE;
             end
-            ADR_X: begin
-                if (mode_x != 1'b0) begin
-                    addr_next = x_out;
-                    state_next = ADR_X_PAUSE;
+
+            //10
+            S_EAY_DONE: begin
+                if (y_ptr_q) EA_y_d = mdr_out[ADDR_WIDTH-1:0];
+
+                if (opcode==OP_MOV && Zo==4'b0000) begin
+                    state_d = S_RDY_MAR;
+                end else if (opcode==OP_OUT) begin
+                    state_d = S_OUT_MAR;
+                end else if (opcode==OP_IN) begin
+                    status_d = 1'b1;
+                    state_d = S_IN_WB;
+                end else if (opcode==OP_STOP) begin
+                    stop_phase_d = 2'd0;
+                    state_d = S_STOP_NEXT;
                 end else begin
-                    state_next = EXEC;
+                    state_d = S_EAZ_START;
                 end
             end
-            ADR_X_PAUSE: begin
-                state_next = ADR_X_EPILOG;
+
+            //11
+            // EA Z
+            S_EAZ_START: begin
+                if (Zo == 4'b0000) begin
+                    EA_z_d = {ADDR_WIDTH{1'b0}};
+                    z_ptr_d = 1'b0;
+                    state_d = S_RDY_MAR;
+                end else if (Z_ind) begin
+                    mar_ld_d = 1'b1;
+                    mar_in_d = Z_dir_addr;
+                    z_ptr_d = 1'b1;
+                    state_d = S_EAZ_PTR_MDR;
+                end else begin
+                    EA_z_d = Z_dir_addr;
+                    z_ptr_d = 1'b0;
+                    state_d = S_RDY_MAR;
+                end
             end
-            ADR_X_EPILOG: begin
-                in_x = mem;
-                ld_x = 1;
-                state_next = EXEC;
+            //12
+            S_EAZ_PTR_MDR: begin
+                state_d = S_EAZ_PTR_MDR_W;
             end
+            //12
+            S_EAZ_PTR_MDR_W: begin
+                mdr_in_d = mem;
+                mdr_ld_d = 1'b1;
+                state_d = S_EAZ_DONE;
+            end
+            //13
+            S_EAZ_DONE: begin
+                if (z_ptr_q) EA_z_d = mdr_out[ADDR_WIDTH-1:0];
+                state_d = S_RDY_MAR;
+            end
+
+            //14
+            // Y then Z
+            S_RDY_MAR: begin
+                mar_ld_d = 1'b1; mar_in_d = EA_y_q;
+                state_d = S_RDY_MAR_W;
+            end
+            //33
+            S_RDY_MAR_W: begin
+                state_d = S_RDY_MDR;
+            end
+            //15
+            S_RDY_MDR: begin
+                mdr_in_d = mem; mdr_ld_d = 1'b1;
+                state_d = S_RDY_MDR_W;
+            end
+            //31
+            S_RDY_MDR_W: begin
+                state_d = (opcode==OP_MOV && Zo==4'b0000) ? S_MOV_WB : S_RDZ_MAR;
+                Y_val_d = mdr_out;
+            end
+            //16
+            S_RDZ_MAR: begin
+                mar_ld_d = 1'b1;
+                mar_in_d = EA_z_q;
+                state_d = S_RDZ_MAR_W;
+            end
+            S_RDZ_MAR_W: begin
+                state_d = S_RDZ_MDR;
+            end
+            //17
+            S_RDZ_MDR: begin
+                mdr_in_d = mem; mdr_ld_d = 1'b1;
+                state_d = S_RDZ_MDR_W;
+            end
+            S_RDZ_MDR_W: begin
+                state_d = S_ALU_EXEC;
+                Z_val_d = mdr_out;
+            end
+            //18
+            // MOV
+            S_MOV_WB: begin
+                we_d = 1'b1;
+                data_d = Y_val_q;
+                mar_ld_d = 1'b1; 
+                mar_in_d = EA_x_q;
+                state_d = S_NEXT_FETCH;
+            end
+            //19
+            // ALU
+            S_ALU_EXEC: begin
+                case (opcode)
+                    OP_ADD: alu_oc_d = ALU_ADD;
+                    OP_SUB: alu_oc_d = ALU_SUB;
+                    OP_MUL: alu_oc_d = ALU_MUL;
+                    default: alu_oc_d = ALU_ADD;
+                endcase
+                alu_a_d = Y_val_q;
+                alu_b_d = Z_val_q;
+                state_d = S_ALU_WB;
+            end
+            //20
+            S_ALU_WB: begin
+                we_d = 1'b1;
+                data_d = alu_f;
+                mar_ld_d = 1'b1;
+                mar_in_d = EA_x_q;
+                state_d = S_NEXT_FETCH;
+            end
+
+            // IN
+            S_IN_WB: begin
+                if (control == 1'b1) begin 
+                    we_d = 1'b1;
+                    data_d = in;
+                    mar_ld_d = 1'b1;
+                    mar_in_d = EA_x_q;
+                    state_d = S_NEXT_FETCH;
+                end else begin
+                    status_d = 1'b1;
+                    state_d = S_IN_WB;
+                end
+            end
+
+            // OUT
+            S_OUT_MAR: begin
+                mar_ld_d = 1'b1;
+                mar_in_d = EA_x_q;
+                state_d = S_OUT_MDR;
+            end
+            S_OUT_MDR: begin
+                state_d = S_OUT_MDR_W;
+            end
+            S_OUT_MDR_W: begin
+                mdr_in_d = mem;
+                mdr_ld_d = 1'b1;
+                state_d = S_OUT_DONE;
+            end
+            S_OUT_DONE: begin
+                out_d = mdr_out;
+                state_d = S_NEXT_FETCH;
+            end
+
+            // STOP
+            S_STOP_NEXT: begin
+                if (stop_phase_q == 2'd0) begin
+                    if (Xo == 4'b0000) begin
+                        stop_phase_d = 2'd1;
+                        state_d = S_STOP_NEXT;
+                    end else begin
+                        mar_ld_d = 1'b1; 
+                        mar_in_d = EA_x_q;
+                        state_d = S_STOP_MDR;
+                    end
+                end else if (stop_phase_q == 2'd1) begin
+                    if (Yo == 4'b0000) begin
+                        stop_phase_d = 2'd2;
+                        state_d = S_STOP_NEXT;
+                    end else begin
+                        mar_ld_d = 1'b1;
+                        mar_in_d = EA_y_q;
+                        state_d = S_STOP_MDR;
+                    end
+                end else begin
+                    if (Zo == 4'b0000) begin
+                        state_d = S_HALT;
+                    end else begin
+                        mar_ld_d = 1'b1;
+                        mar_in_d = EA_z_q;
+                        state_d = S_STOP_MDR;
+                    end
+                end
+            end
+            S_STOP_MDR: begin
+                state_d = S_STOP_MDR_W;
+            end
+            S_STOP_MDR_W: begin
+                mdr_in_d = mem;
+                mdr_ld_d = 1'b1;
+                state_d = S_STOP_OUT;
+            end
+            S_STOP_OUT: begin
+                out_d = mdr_out;
+                if (stop_phase_q < 2'd2) begin
+                    stop_phase_d = stop_phase_q + 1'b1;
+                    state_d = S_STOP_NEXT;
+                end else begin
+                    state_d = S_HALT;
+                end
+            end
+
+            S_NEXT_FETCH: begin
+                state_d = S_FETCH_MAR;
+            end
+
+            S_HALT: begin
+                state_d = S_HALT;
+            end
+
             default: begin
-                
+                state_d = S_RESET;
             end
         endcase
+    end
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            state_q <= S_RESET;
+
+            we_q <= 1'b0;
+            data_q <= {DATA_WIDTH{1'b0}};
+            out_q <= {DATA_WIDTH{1'b0}};
+
+            EA_x_q <= {ADDR_WIDTH{1'b0}}; 
+            EA_y_q <= {ADDR_WIDTH{1'b0}}; 
+            EA_z_q <= {ADDR_WIDTH{1'b0}};
+            Y_val_q <= {DATA_WIDTH{1'b0}}; 
+            Z_val_q <= {DATA_WIDTH{1'b0}};
+            stop_phase_q <= 2'd0;
+
+            x_ptr_q <= 1'b0;
+            y_ptr_q <= 1'b0;
+            z_ptr_q <= 1'b0;
+
+            alu_oc_q <= ALU_ADD; 
+            alu_a_q <= 8'd0; 
+            alu_b_q <= 8'd0;
+        end else begin
+            state_q <= state_d;
+
+            we_q <= we_d;
+            data_q <= data_d;
+            out_q <= out_d;
+
+            EA_x_q <= EA_x_d; EA_y_q <= EA_y_d; EA_z_q <= EA_z_d;
+            Y_val_q <= Y_val_d; Z_val_q <= Z_val_d;
+            stop_phase_q <= stop_phase_d;
+
+            x_ptr_q <= x_ptr_d; y_ptr_q <= y_ptr_d; z_ptr_q <= z_ptr_d;
+
+            alu_oc_q <= alu_oc_d; alu_a_q <= alu_a_d; alu_b_q <= alu_b_d;
+        end
     end
 
 endmodule

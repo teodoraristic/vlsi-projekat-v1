@@ -1,9 +1,10 @@
 module memory #(
-	parameter FILE_NAME = "mem_init copy.mif",
+	parameter FILE_NAME = "mem_init.mif",
     parameter ADDR_WIDTH = 6,
     parameter DATA_WIDTH = 16
 )(
     input clk,
+	input rst_n,
     input we,
     input [ADDR_WIDTH - 1:0] addr,
     input [DATA_WIDTH - 1:0] data,
@@ -11,14 +12,10 @@ module memory #(
 );
 
 	(* ram_init_file = FILE_NAME *) reg [DATA_WIDTH - 1:0] mem [2**ADDR_WIDTH - 1:0];
-   
-    initial begin
-        $readmemh("mem_init copy.mif", mem);  // ako je .mif u hex formatu
-    end
 
     always @(posedge clk) begin
         if (we) begin
-            mem[addr] = data;
+			mem[addr] <= data;
         end
         out <= mem[addr];
     end

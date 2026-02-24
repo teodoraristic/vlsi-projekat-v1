@@ -1,43 +1,46 @@
 module register #(
-    parameter DATA_WIDTH = 16,
-    parameter HIGH = DATA_WIDTH - 1
-) (
+    parameter DATA_WIDTH = 16
+)(
     input clk,
     input rst_n,
     input cl,
     input ld,
-    input [HIGH:0] in,
+    input [DATA_WIDTH - 1:0]in,
     input inc,
     input dec,
     input sr,
     input ir,
     input sl,
     input il,
-    output [HIGH:0] out
+    output [DATA_WIDTH - 1:0] out
 );
-
-    //reg state_next, state_reg;
-    reg [HIGH:0] out_next, out_reg;
+    reg [DATA_WIDTH -1 :0] out_reg, out_next;
+    
     assign out = out_reg;
 
-    always @(posedge clk, negedge rst_n)
+    always @(posedge clk, negedge rst_n) begin
         if (!rst_n)
             out_reg <= {DATA_WIDTH{1'b0}};
-        else
+        else begin
             out_reg <= out_next;
-    
+        end
+    end
 
     always @(*) begin
         out_next = out_reg;
-        casex ({cl, ld, inc, dec, sr, sl})
-            6'b1xxxxx: out_next = {DATA_WIDTH{1'b0}};
-            6'b01xxxx: out_next = in;
-            6'b001xxx: out_next = out_reg + 1'b1;
-            6'b0001xx: out_next = out_reg - 1'b1;
-            6'b00001x: out_next = {ir, out_reg[HIGH:1]};
-            6'b000001: out_next = {out_reg[HIGH-1:0], il};
-            default: out_next = out_reg;
-        endcase
-    end
 
+        if (cl)
+            out_next = {DATA_WIDTH{1'b0}};
+        else if (ld)
+            out_next = in;
+        else if (inc)
+            out_next = out_reg + 1;
+        else if (dec)
+            out_next = out_reg - 1;
+        else if (sr)
+            out_next = {ir, out_reg[DATA_WIDTH - 1:1]};
+        else if (sl)
+            out_next = {out_reg[DATA_WIDTH - 2:0], il};
+    end
+        
 endmodule
